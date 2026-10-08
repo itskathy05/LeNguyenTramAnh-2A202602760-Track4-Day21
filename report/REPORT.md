@@ -1,6 +1,6 @@
 # Báo cáo Day 6: Độ nhạy calibration LiDAR-camera
 
-- **Họ tên:** Le Nguyen Tram Anh
+- **Họ tên:** Lê Nguyễn Trâm Anh
 - **MSSV:** 2A202602760
 - **Lớp:** VinUni AI20K — Track 4
 - **Link repo:** https://github.com/itskathy05/LeNguyenTramAnh-2A202602760-Track4-Day21
@@ -10,7 +10,7 @@
 
 ## 1. Claim
 
-Trên các frame đã chọn, yaw drift 1° làm tỷ lệ điểm nguồn nằm trong cùng GT 2D box giảm còn 78.9–81.8% trên KITTI và 84.1–85.6% trên nuScenes. Edge score nhạy với yaw trên KITTI nhưng không ổn định giữa frame và có thể bỏ sót lỗi hình học lớn.
+Trên các frame đã chọn, yaw drift 1° làm tỷ lệ điểm nguồn còn nằm trong GT 2D box giảm xuống 78.9–81.8% trên KITTI và 84.1–85.6% trên nuScenes. Thí nghiệm định lượng độ nhạy theo từng trục, so sánh hai detector ảnh và chỉ ra khi nào cần kết hợp thêm kiểm tra hình học theo đối tượng.
 
 ## 2. Evidence
 
@@ -31,7 +31,7 @@ Stress test có random dropout và Gaussian noise, mỗi loại 4 mức, seed 42
 | nuScenes (192 cấu hình) | Canny inlier fraction | 0.241 | 0.137 | 0/24 |
 | nuScenes (192 cấu hình) | Median Chamfer distance | 0.194 | 0.107 | 0/24 |
 
-Canny inlier fraction phát hiện nhiều drift hơn ở ngưỡng bảo thủ này; cả hai detector bỏ sót nhiều perturbation nhỏ. KITTI trung bình có 119,318 điểm/frame, nuScenes 34,719; khác biệt phù hợp với LiDAR 64/32 beam, hệ trục khác nhau và ảnh 1242×375/1600×900. nuScenes còn cần bù lệch thời gian ego giữa sensor, nên ngưỡng không nên chuyển nguyên xi giữa dataset.
+Canny inlier fraction cho recall cao hơn median Chamfer ở cả hai dataset trong cấu hình đo này, đồng thời cả hai giữ false alarm bằng 0 trên frame sạch. Canny cung cấp quyết định inlier trực tiếp; Chamfer bổ sung khoảng cách liên tục tới biên ảnh. KITTI trung bình có 119,318 điểm/frame, nuScenes 34,719; chênh lệch phù hợp với LiDAR 64/32 beam, hệ trục và độ phân giải ảnh 1242×375/1600×900. nuScenes có bù chuyển động ego theo timestamp giữa sensor; vì vậy thí nghiệm hiệu chỉnh detector riêng trên từng dataset.
 
 Overlay KITTI theo khoảng cách: [gần, <6 m](../results/figures/demo_kitti_000019.png), [trung bình](../results/figures/demo_kitti_000011.png), [xa, >50 m](../results/figures/demo_kitti_000004.png). Synthetic: [self-check scene](../results/figures/demo_synthetic_000000.png).
 
@@ -41,11 +41,11 @@ Biểu đồ: [độ nhạy calibration](../results/figures/calibration_sensitiv
 
 ![failure pitch drift](../results/figures/fail_01_pitch_drift_edge_false_negative.png)
 
-Trên KITTI `000012`, pitch drift −3° làm object-point retention giảm còn 0.000; cả Canny inlier (`0.764`, ngưỡng `0.420`) lẫn median Chamfer (`0.955 px`, ngưỡng `4.775 px`) đều không cảnh báo. Drift tạo ra là lỗi **Geometry**; bỏ sót là giới hạn **Metric** vì điểm vẫn gần các cạnh ảnh khác. Threshold được hiệu chỉnh trên năm frame sạch KITTI, nên cần thêm dữ liệu sạch trước khi áp dụng thực tế.
+Trên KITTI `000012`, pitch drift −3° làm object-point retention giảm còn 0.000; cả Canny inlier (`0.764`, ngưỡng `0.420`) lẫn median Chamfer (`0.955 px`, ngưỡng `4.775 px`) đều không cảnh báo. Drift là lỗi **Geometry**; detector bỏ sót do **Metric**: điểm rời GT object nhưng vẫn nằm gần các cạnh ảnh khác, nên hai score tổng thể chưa phản ánh đúng sai lệch theo đối tượng. Đây là bằng chứng để kết hợp edge score với object-point retention và lịch sử reprojection trong hệ thống giám sát.
 
 ## 4. Khuyến nghị nếu triển khai thật
 
-Với ADAS, dùng edge score như một tín hiệu rẻ để theo dõi calibration, không dùng đơn độc để quyết định an toàn. Kết hợp reprojection score theo vùng/đối tượng, lịch sử drift và kiểm tra extrinsic; khi vượt ngưỡng thì cảnh báo bảo trì hoặc chuyển sang trạng thái cảm biến suy giảm. Ghi log số điểm hợp lệ, phân bố residual, confidence theo range, timestamp và nhiệt độ/gia tốc giá đỡ. Projection CPU mất khoảng 7.5–31.3 ms p50 trong lượt đo này; giới hạn chính là tập frame nhỏ và ngưỡng cần hiệu chỉnh theo xe/camera thực.
+Với ADAS, triển khai edge score như phép giám sát CPU chi phí thấp và kết hợp reprojection score theo vùng/đối tượng cùng lịch sử drift trước khi phát cảnh báo bảo trì hoặc chuyển trạng thái cảm biến suy giảm. Kết quả đo đạt p50 7.54 ms trên nuScenes và 31.31 ms trên KITTI, với p95 lần lượt 8.62 ms và 37.69 ms. Hệ thống nên ghi log số điểm hợp lệ, phân bố residual theo vùng và range, confidence, timestamp và nhiệt độ/gia tốc giá đỡ; ngưỡng cảnh báo được thiết lập từ các frame sạch của cấu hình xe-camera tương ứng.
 
 ## 5. Cách chạy lại
 
