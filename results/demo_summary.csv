@@ -1,0 +1,6 @@
+dataset,frame_id,points,inside_fov,inside_fov_ratio,image
+synthetic,000000,23953,3910,0.163236,results/figures/demo_synthetic_000000.png
+kitti,000019,115697,18792,0.162424,results/figures/demo_kitti_000019.png
+kitti,000011,108004,19946,0.184678,results/figures/demo_kitti_000011.png
+kitti,000004,115976,19063,0.164370,results/figures/demo_kitti_000004.png
+nuscenes,scene-0103_010,34720,3120,0.089862,results/figures/demo_nuscenes_scene-0103_010.png
