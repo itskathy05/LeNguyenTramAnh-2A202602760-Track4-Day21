@@ -78,6 +78,7 @@ def _metrics(points: np.ndarray, calib, image: np.ndarray, labels, clean_uv=None
     tracked_indices = base_indices[base_inside]
     retention = float("nan")
     edge_score = float("nan")
+    chamfer_median = float("nan")
     object_count = 0
     if len(tracked_indices):
         object_count = len(tracked_indices)
@@ -99,11 +100,14 @@ def _metrics(points: np.ndarray, calib, image: np.ndarray, labels, clean_uv=None
         ys = np.clip(np.rint(np.nan_to_num(selected_uv[:, 1])).astype(int), 0, h - 1)
         sampled_distance = edge_distance[ys, xs]
         if valid_selected.any():
-            edge_score = float(np.mean(sampled_distance[valid_selected] <= RADIUS_PX))
+            valid_distances = sampled_distance[valid_selected]
+            edge_score = float(np.mean(valid_distances <= RADIUS_PX))
+            chamfer_median = float(np.median(valid_distances))
     return {
         "inside_fov_ratio": fov_ratio,
         "object_point_retention": retention,
         "edge_alignment_score": edge_score,
+        "chamfer_median_px": chamfer_median,
         "object_points_baseline": object_count,
         "points_total": int(len(points)),
     }
@@ -169,25 +173,91 @@ def run_sweep():
                                  "axis": axis, "value": value, "unit": unit, "seed": SEED, **m})
     thresholds = {}
     for name in ("kitti", "nuscenes"):
-        clean_scores = [float(r["edge_alignment_score"]) for r in rows
+        clean_rows = [r for r in rows
                        if r["dataset"] == name and r["frame_id"] in DATASETS[name][1]
                        and r["perturbation"] == "rotation" and r["axis"] == "yaw" and float(r["value"]) == 0
                        and np.isfinite(float(r["edge_alignment_score"]))]
-        # Conservative dataset-specific threshold: lowest score measured on the clean reference frames.
-        thresholds[name] = min(clean_scores) if clean_scores else float("nan")
+        edge_scores = [float(r["edge_alignment_score"]) for r in clean_rows]
+        chamfer_scores = [float(r["chamfer_median_px"]) for r in clean_rows
+                          if np.isfinite(float(r["chamfer_median_px"]))]
+        # Conservative dataset-specific thresholds, calibrated only from unperturbed reference frames.
+        thresholds[name] = {
+            "edge": min(edge_scores) if edge_scores else float("nan"),
+            "chamfer": max(chamfer_scores) if chamfer_scores else float("nan"),
+        }
     for row in rows:
-        threshold = thresholds[row["dataset"]]
+        threshold = thresholds[row["dataset"]]["edge"]
+        chamfer_threshold = thresholds[row["dataset"]]["chamfer"]
         score = float(row["edge_alignment_score"])
+        chamfer = float(row["chamfer_median_px"])
         retention = float(row["object_point_retention"])
         row["drift_threshold"] = threshold
         row["drift_detected"] = bool(np.isfinite(score) and np.isfinite(threshold) and score < threshold)
+        row["chamfer_threshold_px"] = chamfer_threshold
+        row["chamfer_drift_detected"] = bool(np.isfinite(chamfer) and np.isfinite(chamfer_threshold)
+                                              and chamfer > chamfer_threshold)
         row["retention_threshold"] = 0.95
         row["retention_drift_detected"] = bool(np.isfinite(retention) and retention < 0.95)
     _write_csv(OUT / "calibration_sweep.csv", rows)
+    comparison = _compare_detectors(rows)
+    _write_csv(OUT / "b1_detector_comparison.csv", comparison)
     _plot_sweep(rows)
     _plot_dataset_summary(rows)
+    _plot_algorithm_comparison(comparison)
     _make_failure(rows)
     print(f"sweep: {len(rows)} configurations -> results/calibration_sweep.csv")
+
+
+def _compare_detectors(rows):
+    """Evaluate both image-edge detectors against injected-drift labels on identical rows."""
+    summary = []
+    algorithms = (("Canny inlier fraction", "drift_detected"),
+                  ("Median Chamfer distance", "chamfer_drift_detected"))
+    for dataset in ("kitti", "nuscenes"):
+        subset = [r for r in rows if r["dataset"] == dataset]
+        for algorithm, field in algorithms:
+            tp = fp = fn = tn = 0
+            for row in subset:
+                truth = float(row["value"]) != 0.0
+                detected = bool(row[field])
+                if truth and detected:
+                    tp += 1
+                elif truth:
+                    fn += 1
+                elif detected:
+                    fp += 1
+                else:
+                    tn += 1
+            precision = tp / max(tp + fp, 1)
+            recall = tp / max(tp + fn, 1)
+            f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+            accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+            summary.append({"dataset": dataset, "algorithm": algorithm, "evaluated_configs": len(subset),
+                            "clean_configs": sum(float(r["value"]) == 0.0 for r in subset),
+                            "drift_configs": sum(float(r["value"]) != 0.0 for r in subset),
+                            "true_positive": tp, "false_positive": fp, "false_negative": fn, "true_negative": tn,
+                            "precision": precision, "recall": recall, "f1": f1, "accuracy": accuracy})
+    return summary
+
+
+def _plot_algorithm_comparison(rows):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
+    algorithms = ["Canny inlier fraction", "Median Chamfer distance"]
+    x = np.arange(len(algorithms))
+    width = .34
+    for i, (dataset, color) in enumerate((("kitti", "#2563eb"), ("nuscenes", "#ea580c"))):
+        subset = [next(r for r in rows if r["dataset"] == dataset and r["algorithm"] == a) for a in algorithms]
+        offset = (i - .5) * width
+        axes[0].bar(x + offset, [float(r["f1"]) for r in subset], width, color=color, label=dataset)
+        axes[1].bar(x + offset, [float(r["false_positive"]) for r in subset], width, color=color, label=dataset)
+    axes[0].set(title="Same-set drift detection F1", ylabel="F1", ylim=(0, 1.05))
+    axes[1].set(title="False alarms on clean configurations", ylabel="False positives", ylim=(0, None))
+    for ax in axes:
+        ax.set_xticks(x, algorithms, rotation=12, ha="right")
+        ax.grid(axis="y", alpha=.25)
+        ax.legend()
+    fig.savefig(FIG / "b1_algorithm_comparison.png", dpi=160)
+    plt.close(fig)
 
 
 def _plot_sweep(rows):
@@ -332,7 +402,8 @@ def _make_failure(rows):
     cv2.putText(panel, "CLEAN", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     unit = chosen["unit"]
     cv2.putText(panel, f"DRIFT {axis}={value:g} {unit}", (clean_vis.shape[1] + 20, 32), cv2.FONT_HERSHEY_SIMPLEX, .8, (255, 255, 255), 2)
-    cv2.putText(panel, f"retention={float(chosen['object_point_retention']):.3f} edge={float(chosen['edge_alignment_score']):.3f} threshold={float(chosen['drift_threshold']):.3f}",
+    cv2.putText(panel, f"ret={float(chosen['object_point_retention']):.3f} edge={float(chosen['edge_alignment_score']):.3f}/{float(chosen['drift_threshold']):.3f} "
+                f"chamfer={float(chosen['chamfer_median_px']):.2f}/{float(chosen['chamfer_threshold_px']):.2f}",
                 (20, h - 15), cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 2)
     FIG.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(FIG / "fail_01_pitch_drift_edge_false_negative.png"), panel)

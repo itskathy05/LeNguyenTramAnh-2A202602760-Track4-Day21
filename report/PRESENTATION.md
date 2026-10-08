@@ -10,7 +10,7 @@
 
 ## 1:10–1:50 — Kết quả
 
-“Em chạy 432 cấu hình trên 5 frame KITTI và 4 frame nuScenes. KITTI trung bình có khoảng 119 nghìn điểm/frame, nuScenes khoảng 34.7 nghìn do khác sensor. Với yaw +1°, retention trung bình lần lượt là 81.8% và 85.6%. Projection mất khoảng 25.8 ms p50 trên KITTI và 5.0 ms trên nuScenes trong lượt đo CPU cuối.”
+“Em chạy 432 cấu hình trên 5 frame KITTI và 4 frame nuScenes. Em so sánh Canny inlier fraction với median Chamfer trên cùng cấu hình: Canny đạt F1 0.166/0.241, Chamfer 0.073/0.194 trên KITTI/nuScenes; cả hai không báo nhầm trên frame sạch nhưng bỏ sót nhiều drift nhỏ. KITTI có 119 nghìn điểm/frame, nuScenes 34.7 nghìn do sensor khác nhau.”
 
 ## 1:50–2:30 — Failure case
 
